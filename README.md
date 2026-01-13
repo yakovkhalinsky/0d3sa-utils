@@ -46,12 +46,7 @@ Each tool in this repository is self-contained and includes its own documentatio
    cd security/pcap-to-22000
    ```
 
-3. Make the script executable (if needed):
-   ```bash
-   chmod +x pcap-to-22000.sh
-   ```
-
-4. Read the tool's README for usage instructions:
+3. Read the tool's README for usage instructions:
    ```bash
    cat README.md
    ```
@@ -75,7 +70,17 @@ If you're adding a tool that doesn't fit existing categories:
 
 ## License
 
-Individual tools may have their own licenses. Check each tool's directory for license information.
+This repository is licensed under the **GNU General Public License v3.0** (GPL-3.0).
+
+See the [LICENSE](LICENSE) file for the full license text.
+
+### Summary
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 ## Author
 

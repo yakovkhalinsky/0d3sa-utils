@@ -18,10 +18,7 @@ This script automates the process of extracting WPA/WPA2 handshakes from network
 ## Installation
 
 1. Clone or download this repository
-2. Make the script executable:
-   ```bash
-   chmod +x pcap-to-22000.sh
-   ```
+2. The script is already executable and ready to use
 
 ## Dependency Management
 
