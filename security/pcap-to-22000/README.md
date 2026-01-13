@@ -60,7 +60,7 @@ Process one or more directories containing PCAP files:
 
 ### Options
 
-- `-c, --combine` - Combine all extracted hashes into a single file named `hashes_22000.22000`
+- `-c, --combined` - Combine all extracted hashes into a single file named `hashes_22000.22000` (default: individual files)
 - `--no-auto-install` - Skip automatic installation of missing dependencies
 - `-h, --help` - Display help message and exit
 
@@ -104,7 +104,7 @@ The script will recursively search all specified directories for PCAP files.
 - Only files with valid WPA/WPA2 handshakes are created
 - Empty or invalid captures are automatically skipped
 
-### Combine Mode (`-c` flag)
+### Combine Mode (`-c, --combined` flag)
 
 - **Output file**: `hashes_22000.22000`
 - All valid hashes from all processed captures are appended to this single file
