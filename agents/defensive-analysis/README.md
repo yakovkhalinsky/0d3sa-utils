@@ -1,21 +1,63 @@
 # defensive-analysis
 
-Run 10 defensive code analysis checks that catch common bugs causing production incidents. Auto-detects the project's stack and adapts checks accordingly. Outputs a PASS/FAIL report with file:line references and a summary score.
+Run 10 defensive code analysis checks that catch common bugs causing production incidents. Auto-detects the project's stack and adapts checks accordingly. Outputs a PASS/FAIL report with file:line references, actionable fixes, and a summary score.
 
 ## The 10 Checks
 
 | # | Check | What it catches |
-|---|-------|----------------|
+|---|-------|------------------|
 | 1 | Mutation Invalidation | Mutations that don't invalidate/refetch dependent queries |
 | 2 | Query Error Handling | Queries that swallow or ignore errors |
-| 3 | Type Safety | `as any`, unexplained `@ts-ignore`, untyped params, non-null assertions |
+| 3 | Type Safety | `as any`, `as { ... }` type assertions on unvalidated input, unexplained `@ts-ignore`, untyped params, non-null assertions |
 | 4 | API Path Safety | Hardcoded inline API paths instead of centralized route maps |
-| 5 | Runtime Validation | External data entering the app without schema validation |
+| 5 | Runtime Validation (Client + Server) | External data entering the app without schema validation — covers both client-side API responses AND server-side request body/params/query |
 | 6 | State Lifecycle Docs | Async hooks/stores missing Error, Cleanup, and Transitions documentation |
 | 7 | Memory Leaks | Un-cleaned effects, unsubscribed subscriptions, orphaned timers |
 | 8 | Error State Handling | Components with access to errors but not rendering them |
 | 9 | Loading State Handling | Buttons that can be double-clicked, data areas with no loading indicator |
 | 10 | Uncontrolled State | Stuck boolean flags, state machines without error paths, optimistic updates without rollback |
+
+## Key Improvements (v2)
+
+### Server-Side Input Validation (Check 5b)
+
+The most commonly missed category. The check now systematically audits every server route handler:
+
+- Finds all route/controller/handler files
+- For each POST/PUT/PATCH/DELETE endpoint, verifies `request.body` is validated with a schema
+- Checks `request.params` and `request.query` for type assertions like `as { id: string }`
+- Flags `request.body as { ... }` patterns as type assertions (not runtime validation)
+- Reports a coverage ratio (validated routes / total routes)
+- Upgrades severity if more than half of routes lack validation
+
+### Type Assertions on Unvalidated Input (Check 3)
+
+Now catches `as { ... }` type assertions on `request.body`, `request.params`, and `request.query` — not just `as any`. These patterns provide TypeScript type information but zero runtime guarantees, making them equivalent to `as any` from a validation perspective.
+
+### Cross-Check Verification (Phase 2.5)
+
+After completing all 10 checks, the analysis verifies overlap consistency:
+
+1. **Check 3 + Check 5**: `request.body/params/query as { ... }` patterns must appear in both checks
+2. **Check 1 + Check 10**: Mutations that only invalidate on success may leave stale data on error
+3. **Check 7 + Check 10**: Resources only cleaned on success but not error are both leaks and uncontrolled state
+4. **Coverage ratio**: If more than half of server routes lack validation, all Check 5 findings are upgraded one severity level
+
+### Per-Instance Enumeration
+
+Every finding must list the specific file:line. Grouping by pattern ("7 routes lack validation") is not acceptable — each instance is listed individually with its fix.
+
+### Verification Checklist
+
+The report includes a verification checklist for re-running the analysis after fixes:
+
+- All Check 3 type assertions on unvalidated input now use schema validation
+- All Check 5 server routes now validate request.body/params/query with schemas
+- All cross-referenced findings have been addressed in both checks
+
+### Actionable Fixes
+
+Every finding includes a one-sentence fix description, not just in the recommendations section but inline with each finding.
 
 ## Supported Agents
 

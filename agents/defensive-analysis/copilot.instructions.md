@@ -13,6 +13,7 @@ Before applying checks, identify the project's stack from its dependencies:
 - **Data fetching**: TanStack Query, SWR, plain fetch/axios, RxJS, GraphQL
 - **State management**: Zustand, Redux, Pinia, Jotai, Recoil, Valtio
 - **Validation**: Zod, Joi, Yup, Valibot, Superstruct, or none
+- **Server framework**: Fastify, Express, Koa, Hapi, or none
 - **Framework**: React, Vue, Svelte, or other
 
 Adapt each check to the patterns and libraries the project actually uses.
@@ -44,6 +45,7 @@ Every query or data-fetching call must surface its error to consuming code.
 Avoid casts and annotations that bypass the type system.
 
 - `as any` casts are bugs in client-side hooks, components, and API modules. Documented `eslint-disable` exemptions are acceptable.
+- `as { ... }` type assertions on unvalidated input (`request.body as { title: string }`, `request.params as { id: string }`, `request.query as { ... }`) are bugs. These provide TypeScript type information but zero runtime guarantees. Flag these as type safety issues here and also as validation gaps in Check 5.
 - `@ts-ignore` or `@ts-expect-error` without a justified comment is a bug.
 - Untyped function parameters (`: any`, untyped arrow params) are bugs.
 - `!` non-null assertions on values that could be null/undefined at runtime are bugs.
@@ -59,12 +61,27 @@ API paths must come from a centralized route map, constants file, or contract-ge
 
 ### 5. Runtime Validation
 
-Data entering the application from external sources must be validated at the boundary.
+Data entering the application from external sources must be validated at the boundary. This check covers BOTH client-side and server-side validation.
 
+**5a: Client-Side Validation**
 - If a validation library (Zod, Joi, Yup, Valibot, Superstruct) is present, verify API responses are parsed through schemas. Silent `safeParse` without follow-up is a bug.
 - If no validation library exists, every API boundary without runtime validation is a critical bug.
+- Check: API client responses, SSE/WebSocket messages, form inputs before submission.
 
-Check these boundaries: API client responses, form submissions, URL parameters/query strings, WebSocket/SSE messages.
+**5b: Server-Side Input Validation**
+This is the most commonly missed category and the most impactful for security.
+
+For every server route handler that accepts external input:
+- `request.body` must be validated with a schema (Zod, Joi, etc.) BEFORE any business logic.
+- `request.params` must be validated (they are user-controlled input).
+- `request.query` must be validated (query strings arrive as strings; a cast to `number` is not validation).
+- `request.body as { title: string }` is a type assertion, NOT runtime validation — it's a bug.
+- `request.params as { id: string }` is a type assertion, NOT runtime validation — it's a bug.
+- `request.query as { page: number }` is a type assertion, NOT runtime validation — it's a bug.
+- Destructuring without validation (`const { title } = request.body`) provides no runtime guarantees — it's a bug.
+- Manual checks like `if (!title)` are partial validation — should use a schema.
+
+What counts as validated: `validateBody(Schema, request.body, reply)`, `Schema.parse(request.body)`, `Schema.safeParse(request.body)` with error handling, or a registered validation middleware/plugin.
 
 ### 6. State Lifecycle Documentation
 
@@ -115,9 +132,19 @@ State that can get stuck in an inconsistent state must be prevented.
 - **Race conditions in state updates**: Async operations updating state after component unmount need cleanup or guard variables. Missing guard is a medium bug.
 - **Optimistic updates without rollback**: Every `onMutate` doing optimistic updates must have an `onError` handler that rolls back. Missing rollback is a critical bug.
 
+## Cross-Check Verification
+
+After applying all 10 checks, verify cross-check consistency:
+
+1. **Check 3 + Check 5**: Every `request.body/params/query as { ... }` pattern should appear in both Check 3 (type safety) and Check 5 (validation). If found in only one, add it to the other.
+2. **Check 1 + Check 10**: Mutations that invalidate only on `onSuccess` but not `onSettled` may leave stale data on error.
+3. **Check 7 + Check 10**: Resources (AbortController, EventSource, etc.) that are only cleaned up on success but not on error paths are both memory leaks and uncontrolled state.
+
 ## Applying These Checks
 
 When reviewing or writing code, systematically evaluate it against each of the 10 checks. Record findings with file path, line number, severity (critical/medium/low), and a one-sentence description of the risk.
+
+For server-side validation (Check 5b), enumerate every route handler individually — do not group findings by pattern. List each unvalidated endpoint with its file:line.
 
 Prioritize findings by severity:
 - **Critical**: Bugs that cause data loss, security vulnerabilities, or application crashes

@@ -1,5 +1,5 @@
 ---
-description: "Run 10 defensive code analysis checks — mutation invalidation, query error handling, type safety, API path safety, runtime validation, state lifecycle, memory leaks, error state display, loading state display, uncontrolled state. Auto-detects stack and adapts checks. Outputs a PASS/FAIL report with file:line references and a summary score."
+description: "Run 10 defensive code analysis checks — mutation invalidation, query error handling, type safety, API path safety, runtime validation (client + server), state lifecycle, memory leaks, error state display, loading state display, uncontrolled state. Auto-detects stack and adapts checks. Outputs a PASS/FAIL report with file:line references, actionable fixes, and a summary score."
 globs: "**/*.{ts,tsx,js,jsx,vue,svelte,py,go,rs,java}"
 alwaysApply: false
 ---
@@ -35,6 +35,7 @@ Before running any checks, determine the project's technology stack.
 | `redux` / `@reduxjs/toolkit` | Redux state management |
 | `pinia` | Vue state management |
 | `zod` / `joi` / `yup` / `valibot` / `superstruct` | Runtime validation library |
+| `fastify` / `express` / `koa` / `hapi` | Server framework |
 | No validation library | No runtime validation |
 
 After detection, print a stack summary:
@@ -45,6 +46,7 @@ Source: apps/web/src/
 Hooks: apps/web/src/hooks/
 Components: apps/web/src/components/
 API: apps/web/src/api/
+Server: apps/web/src/server/
 Stores: apps/web/src/stores/
 ```
 
@@ -57,6 +59,9 @@ Run each check below. For every finding, record:
 - **Line number** (if applicable)
 - **Severity**: `critical` | `medium` | `low`
 - **Description**: One sentence explaining the risk
+- **Fix**: One sentence describing the fix (for every finding, not just in recommendations)
+
+You MUST enumerate every individual instance. Do NOT group findings by pattern — list each file:line separately. If a pattern appears 7 times across 3 files, report 7 findings with specific line numbers.
 
 ---
 
@@ -98,15 +103,22 @@ Every query hook or data-fetching call should surface its error to consuming cod
 
 Search for casts and annotations that bypass the type system.
 
-1. `as any` casts — every instance is a FAIL (severity: medium, or critical if in client-side hooks/components/api modules). Lines with `eslint-disable` comments documenting the cast are exempt.
-2. `// @ts-ignore` or `// @ts-expect-error` without a justified comment — FAIL (severity: low if infrequent, medium if widespread).
-3. Untyped function parameters — `: any`, untyped arrow params without context typing — FAIL (severity: medium).
-4. `!` non-null assertions on values that could be null/undefined at runtime — FAIL (severity: medium if in business logic, low if in UI).
+1. **`as any` casts** — every instance is a FAIL (severity: medium, or critical if in client-side hooks/components/api modules). Lines with `eslint-disable` comments documenting the cast are exempt.
+
+2. **`as { ... }` type assertions on unvalidated input** — `request.body as { title: string }`, `request.params as { id: string }`, `request.query as { page: number }` and similar patterns where runtime data is cast to a type without validation. These provide TypeScript type information but zero runtime guarantees. Every instance is a FAIL (severity: medium). This is a dual finding that also appears in Check 5 — report it here for type safety and cross-reference Check 5 for the validation gap.
+
+3. **`// @ts-ignore` or `// @ts-expect-error`** without a justified comment — FAIL (severity: low if infrequent, medium if widespread).
+
+4. **Untyped function parameters** — `: any`, untyped arrow params without context typing — FAIL (severity: medium).
+
+5. **`!` non-null assertions** on values that could be null/undefined at runtime — FAIL (severity: medium if in business logic, low if in UI).
 
 **Exclusions:** Test files are exempt. Server route handlers with `as any` for request params are medium, not critical.
 
-**Pass condition:** No `as any` casts in client code, all `@ts-ignore`/`@ts-expect-error` justified.
-**Fail condition:** Any unexplained type escape hatches in production code.
+**Cross-reference with Check 5:** Every `request.body/params/query as { ... }` finding here should also be flagged in Check 5 as an unvalidated input boundary. This ensures the fix addresses both the type safety and validation aspects.
+
+**Pass condition:** No `as any` casts in client code, no `as { ... }` assertions on unvalidated input, all `@ts-ignore`/`@ts-expect-error` justified.
+**Fail condition:** Any unexplained type escape hatches in production code, or type assertions on unvalidated runtime data.
 
 ---
 
@@ -126,20 +138,45 @@ API paths should be centralized in a route map, constants file, or generated fro
 
 ### Check 5: Runtime Validation
 
-Data entering the application from external sources should be validated at the boundary.
+Data entering the application from external sources should be validated at the boundary. This check covers BOTH client-side and server-side validation.
+
+#### 5a: Client-Side Validation
 
 **Zod/Joi/Yup/Valibot/Superstruct:** Search for schema definitions (e.g., `z.object`, `z.string`, `Schema.parse`, `Schema.safeParse`). Check that API response parsing uses schemas. If the client layer has validation, verify it throws or logs on failure — silent `safeParse` without follow-up is medium severity.
 
-**No validation library found:** Every API boundary without runtime validation is a FAIL (severity: critical).
+**No validation library found:** Every client-side API boundary without runtime validation is a FAIL (severity: critical).
 
-**Specific checks:**
+Check these client boundaries:
 1. API client responses: Is there a validation layer? Where?
-2. Form submissions: Are inputs validated before being sent?
-3. URL parameters / query strings: Validated before use?
-4. WebSocket / SSE messages: Validated before processing?
+2. SSE/WebSocket messages: Validated before processing?
+3. Form inputs: Validated before being sent?
 
-**Pass condition:** All external data boundaries have runtime validation schemas.
-**Fail condition:** Any API boundary that accepts unvalidated external data.
+#### 5b: Server-Side Input Validation
+
+For every server route handler that accepts external input, verify that the input is validated with a schema (Zod, Joi, etc.) BEFORE being used. This is the most commonly missed validation boundary.
+
+**Systematic check procedure:**
+1. Find all server route files (e.g., `routes/`, `controllers/`, `handlers/`).
+2. For each route file, find every POST/PUT/PATCH/DELETE endpoint.
+3. For each endpoint, check whether `request.body` is validated with `Schema.parse()`, `Schema.safeParse()`, a `validateBody()` helper, or equivalent BEFORE any business logic.
+4. Also check `request.params` and `request.query` — these are user-controlled input too.
+5. Specifically search for `request.body as { ... }`, `request.params as { ... }`, `request.query as { ... }` patterns. These are TypeScript type assertions that provide ZERO runtime validation. Every instance is a FAIL (severity: medium, or critical if no validation library is present).
+
+**What counts as validated:**
+- `validateBody(Schema, request.body, reply)` or `Schema.parse(request.body)` — PASS
+- `Schema.safeParse(request.body)` with error handling — PASS
+- A middleware or plugin that validates before the handler — PASS (verify the middleware exists and is registered)
+- `request.body as { title: string }` — FAIL (type assertion, not runtime validation)
+- `const { title } = request.body as any` — FAIL (type assertion, not runtime validation)
+- Destructuring without validation: `const { title } = request.body` — FAIL (TypeScript infers the type but doesn't validate at runtime)
+- Manual checks like `if (!title)` — FAIL (partial validation, should use a schema)
+
+**What about `request.params` and `request.query`:**
+- `request.params as { id: string }` — FAIL (use a param schema or at minimum validate the value)
+- `request.query as { page: number }` — FAIL (query strings arrive as strings; a cast to `number` is not validation)
+
+**Pass condition:** All external data boundaries (both client and server) have runtime validation.
+**Fail condition:** Any boundary that accepts unvalidated external data.
 
 ---
 
@@ -222,9 +259,23 @@ State that can get stuck in an inconsistent state and never recover.
 
 ---
 
+## Phase 2.5: Cross-Check Verification
+
+After completing all 10 checks, review the findings for cross-check consistency:
+
+1. **Check 3 + Check 5 overlap:** Every `request.body/params/query as { ... }` pattern found in Check 3 should also appear in Check 5 as an unvalidated input boundary. If a pattern was found in one check but not the other, add it to the missing check with a note like "(cross-referenced from Check 3)" or "(cross-referenced from Check 5)".
+
+2. **Check 1 + Check 10 overlap:** Mutations that lack `onError` handlers (Check 10 uncontrolled state) should also be reviewed for whether they invalidate queries on failure (Check 1). A mutation that invalidates only on `onSuccess` but not `onSettled` may leave stale data on error.
+
+3. **Check 7 + Check 10 overlap:** Resources created in `useEffect` or async operations (Check 7 memory leaks) should also be checked for cleanup in error paths (Check 10 uncontrolled state). An `AbortController` that is only aborted on success but not on error is both a memory leak and uncontrolled state.
+
+4. **Completeness check:** For Check 5b specifically, verify you found ALL server route files. Count the total route files and the total routes with validation, then report the coverage ratio. If more than half of routes lack validation, upgrade the severity of all Check 5 findings by one level (low → medium, medium → critical).
+
+---
+
 ## Phase 3: Generate Report
 
-After completing all 10 checks, generate a structured report in this exact format:
+After completing all checks and cross-check verification, generate a structured report in this exact format:
 
 ```
 # Defensive Code Analysis Report
@@ -234,6 +285,7 @@ After completing all 10 checks, generate a structured report in this exact forma
 - Data Fetching: <detected>
 - State Management: <detected>
 - Validation: <detected>
+- Server: <detected>
 - Source Paths: <scanned directories>
 
 ## Results
@@ -262,15 +314,25 @@ After completing all 10 checks, generate a structured report in this exact forma
 ### Check 1: Mutation Invalidation
 - [PASS] No issues found.
 OR
-- [FAIL] <file:line> <severity> — <description>
+- [FAIL] <file:line> <severity> — <description>. Fix: <one-sentence fix>
 
 (repeat for each check)
+
+## Cross-Check Notes
+(Any findings that appear in multiple checks, or inconsistencies found during cross-check verification)
 
 ## Recommendations
 
 1. <Most impactful recommendation based on findings>
 2. <Second most impactful>
 3. <Third most impactful>
+
+## Verification Checklist
+
+After implementing fixes, re-run this analysis to verify:
+- [ ] All Check 3 type assertions on unvalidated input now use schema validation
+- [ ] All Check 5 server routes now validate request.body/params/query with schemas
+- [ ] All cross-referenced findings have been addressed in both checks
 ```
 
 ### Scoring
@@ -295,9 +357,13 @@ OR
    a. Search for relevant patterns across the codebase.
    b. Inspect specific files where patterns are found.
    c. Find all files in relevant directories.
-   d. Record every finding with file:line and severity.
-3. Generate the report (Phase 3).
+   d. **For Check 5b specifically**: Glob for all route/controller/handler files, then read each one to identify every endpoint and whether it validates input. Report the coverage ratio.
+   e. Record **every individual instance** with file:line and severity. Do NOT group findings by pattern — list each occurrence separately.
+3. Run cross-check verification (Phase 2.5).
+4. Generate the report (Phase 3).
 
 Be thorough but concise. Focus on findings, not compliments. Do not skip a check even if the stack detection suggests it may not apply — adapt the check to whatever patterns exist. For example, if no query library is found, Check 2 applies to raw fetch calls instead.
+
+**Important**: For server-side validation (Check 5b), you MUST enumerate every route handler individually. A finding like "7 route handlers lack validation" is not acceptable — list each one with its file:line. This is the most commonly missed category and the most impactful for security.
 
 Target directory: Use the current project directory, or a path specified by the user.
