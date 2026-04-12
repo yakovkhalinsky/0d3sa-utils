@@ -10,11 +10,23 @@ This repository contains various command-line utilities and scripts for differen
 
 ```
 0d3sa-utils/
+├── agents/            # Skills and prompts for coding agents
 ├── security/          # Security and penetration testing tools
 └── README.md          # This file
 ```
 
 ## Categories
+
+### 🤖 Agents
+
+Skills and prompts for coding agents (Claude Code, Cursor, GitHub Copilot, etc.). Each skill provides a structured analysis workflow that can be installed as a slash command, contextual rule, or always-on instruction.
+
+#### Tools
+
+- **[defensive-analysis](agents/defensive-analysis/)** - Run 10 defensive code analysis checks (mutation invalidation, query error handling, type safety, API path safety, runtime validation, state lifecycle, memory leaks, error state handling, loading state handling, uncontrolled state). Auto-detects the project stack and adapts checks. Outputs a PASS/FAIL report with file:line references and a summary score.
+  - Supports Claude Code, Cursor, and GitHub Copilot
+  - Install with `./agents/install.sh install`
+  - See [detailed documentation](agents/defensive-analysis/README.md)
 
 ### 🔒 Security
 
