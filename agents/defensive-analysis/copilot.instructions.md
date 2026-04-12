@@ -47,7 +47,8 @@ Avoid casts and annotations that bypass the type system.
 - `as any` casts are bugs in client-side hooks, components, and API modules. Documented `eslint-disable` exemptions are acceptable.
 - `as { ... }` type assertions on unvalidated input (`request.body as { title: string }`, `request.params as { id: string }`, `request.query as { ... }`) are bugs. These provide TypeScript type information but zero runtime guarantees. Flag these as type safety issues here and also as validation gaps in Check 5.
 - `@ts-ignore` or `@ts-expect-error` without a justified comment is a bug.
-- Untyped function parameters (`: any`, untyped arrow params) are bugs.
+- `: any` type annotations on variables, returns, and callbacks are bugs (severity: medium in server code, low in client code). These include `(m: any) =>`, `let result: any`, `function foo(): any`, `(request: any, reply: any)`. They often signal that surrounding code lacks proper validation.
+- `as unknown as { ... }` double-cast chains that bypass private/internal fields are bugs. Fix: add a proper getter method or widen the type.
 - `!` non-null assertions on values that could be null/undefined at runtime are bugs.
 
 Test files are exempt.
@@ -82,6 +83,12 @@ For every server route handler that accepts external input:
 - Manual checks like `if (!title)` are partial validation — should use a schema.
 
 What counts as validated: `validateBody(Schema, request.body, reply)`, `Schema.parse(request.body)`, `Schema.safeParse(request.body)` with error handling, or a registered validation middleware/plugin.
+
+**Severity distinction:**
+- **Not validated at all** (no schema, just type assertions or raw destructuring): medium bug (critical if no validation library exists).
+- **Validated but type-widened** (a validation call exists earlier, but `as any` or `: any` widens the type afterward): low bug. Fix by using the typed return value from the validation helper.
+
+**: any` as a validation gap signal:** When `: any` annotations appear in server route files (handler parameters, callback variables), check whether the surrounding code has proper schema validation. If not, report it as both a type safety issue (Check 3) and a validation gap (Check 5).
 
 ### 6. State Lifecycle Documentation
 
@@ -136,9 +143,24 @@ State that can get stuck in an inconsistent state must be prevented.
 
 After applying all 10 checks, verify cross-check consistency:
 
-1. **Check 3 + Check 5**: Every `request.body/params/query as { ... }` pattern should appear in both Check 3 (type safety) and Check 5 (validation). If found in only one, add it to the other.
+1. **Check 3 + Check 5**: Every `request.body/params/query as { ... }` pattern and every `: any` annotation in server routes should appear in both Check 3 (type safety) and Check 5 (validation). If found in only one, add it to the other.
 2. **Check 1 + Check 10**: Mutations that invalidate only on `onSuccess` but not `onSettled` may leave stale data on error.
 3. **Check 7 + Check 10**: Resources (AbortController, EventSource, etc.) that are only cleaned up on success but not on error paths are both memory leaks and uncontrolled state.
+4. **Severity consistency**: For Check 5b, "validated but type-widened" should be low severity; "not validated at all" should be medium (or critical if no validation library exists). Confirm severity before reporting.
+
+## Fix Mode
+
+When asked to fix findings, prioritize in this order:
+
+1. **Check 5 (Runtime Validation)** — Add schemas and validation helpers to all unvalidated endpoints first. This closes security boundaries.
+2. **Check 3 (Type Safety)** — Replace type assertions with validation helper return types, fix `: any` annotations, replace `as unknown as` chains.
+3. **Check 7 (Memory Leaks)** — Add cleanup returns, unsubscribe, clear timers.
+4. **Check 10 (Uncontrolled State)** — Add error-path resets, rollback handlers.
+5. **Check 1 (Mutation Invalidation)** — Add `invalidateQueries`/`refetchQueries`.
+6. **Check 2 (Query Error Handling)** — Destructure `error` from query hooks.
+7. **Check 8/9 (Error/Loading States)** — Add conditional renders.
+8. **Check 4 (API Path Safety)** — Extract inline paths to constants.
+9. **Check 6 (State Lifecycle Docs)** — Add lifecycle comments.
 
 ## Applying These Checks
 

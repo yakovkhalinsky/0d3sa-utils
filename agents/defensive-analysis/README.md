@@ -8,16 +8,55 @@ Run 10 defensive code analysis checks that catch common bugs causing production 
 |---|-------|------------------|
 | 1 | Mutation Invalidation | Mutations that don't invalidate/refetch dependent queries |
 | 2 | Query Error Handling | Queries that swallow or ignore errors |
-| 3 | Type Safety | `as any`, `as { ... }` type assertions on unvalidated input, unexplained `@ts-ignore`, untyped params, non-null assertions |
+| 3 | Type Safety | `as any`, `as { ... }` type assertions on unvalidated input, `: any` type annotations, `as unknown as` double-cast chains, unexplained `@ts-ignore`, non-null assertions |
 | 4 | API Path Safety | Hardcoded inline API paths instead of centralized route maps |
-| 5 | Runtime Validation (Client + Server) | External data entering the app without schema validation — covers both client-side API responses AND server-side request body/params/query |
+| 5 | Runtime Validation (Client + Server) | External data entering the app without schema validation — covers both client-side API responses AND server-side request body/params/query. Distinguishes "not validated at all" (medium/critical) from "validated but type-widened" (low). |
 | 6 | State Lifecycle Docs | Async hooks/stores missing Error, Cleanup, and Transitions documentation |
 | 7 | Memory Leaks | Un-cleaned effects, unsubscribed subscriptions, orphaned timers |
 | 8 | Error State Handling | Components with access to errors but not rendering them |
 | 9 | Loading State Handling | Buttons that can be double-clicked, data areas with no loading indicator |
 | 10 | Uncontrolled State | Stuck boolean flags, state machines without error paths, optimistic updates without rollback |
 
-## Key Improvements (v2)
+## Key Improvements (v3)
+
+### `: any` Type Annotations (Check 3, item 4)
+
+Now catches `: any` type annotations on variables, returns, and callbacks — not just `as any` casts. Patterns like `(m: any) =>`, `let result: any`, `function foo(): any`, and `(request: any, reply: any)` are flagged as type safety issues. In server route files, these also serve as signals for missing validation (cross-referenced to Check 5).
+
+### `as unknown as` Double-Cast Chains (Check 3, item 6)
+
+Catches `(obj as unknown as { prop: Type }).prop` patterns that use `unknown` as an intermediary to bypass encapsulation. These indicate a missing getter method or a need to widen the source type.
+
+### Severity Distinction for Check 5b (Runtime Validation)
+
+Findings are now distinguished by severity:
+- **Not validated at all** (no schema, just type assertions or raw destructuring): **medium** in server code, **critical** if no validation library exists
+- **Validated but type-widened** (a validation helper exists, but `as any` or `: any` widens the type afterward): **low** — the runtime validation is present, just the type annotation is unnecessary
+
+### Expanded Cross-Check Verification (Phase 2.5)
+
+Cross-check now includes:
+1. **Check 3 + Check 5 overlap** — includes `: any` annotations in server routes (not just `as { ... }` assertions)
+2. **Severity consistency check** — verifies Check 5b severity assignments match the "validated vs not validated" distinction
+3. Original overlaps (Check 1+10, Check 7+10, coverage ratio) remain
+
+### Fix Mode (Phase 4)
+
+When invoked with `--fix` or after analysis, systematically implements fixes in priority order:
+
+1. **Check 5** (Runtime Validation) — Add schemas and validation helpers first
+2. **Check 3** (Type Safety) — Replace type assertions with validation helper return types
+3. **Check 7** (Memory Leaks) — Add cleanup returns, unsubscribe, clear timers
+4. **Check 10** (Uncontrolled State) — Add error-path resets, rollback handlers
+5. Remaining checks in priority order
+
+This eliminates the need for a separate "implement fixes" pass — the analysis can now diagnose and fix in a single invocation.
+
+### Actionable Fixes
+
+Every finding includes a one-sentence fix description, not just in the recommendations section but inline with each finding.
+
+## Previous Improvements (v2)
 
 ### Server-Side Input Validation (Check 5b)
 
@@ -32,16 +71,7 @@ The most commonly missed category. The check now systematically audits every ser
 
 ### Type Assertions on Unvalidated Input (Check 3)
 
-Now catches `as { ... }` type assertions on `request.body`, `request.params`, and `request.query` — not just `as any`. These patterns provide TypeScript type information but zero runtime guarantees, making them equivalent to `as any` from a validation perspective.
-
-### Cross-Check Verification (Phase 2.5)
-
-After completing all 10 checks, the analysis verifies overlap consistency:
-
-1. **Check 3 + Check 5**: `request.body/params/query as { ... }` patterns must appear in both checks
-2. **Check 1 + Check 10**: Mutations that only invalidate on success may leave stale data on error
-3. **Check 7 + Check 10**: Resources only cleaned on success but not error are both leaks and uncontrolled state
-4. **Coverage ratio**: If more than half of server routes lack validation, all Check 5 findings are upgraded one severity level
+Catches `as { ... }` type assertions on `request.body`, `request.params`, and `request.query` — not just `as any`. These patterns provide TypeScript type information but zero runtime guarantees, making them equivalent to `as any` from a validation perspective.
 
 ### Per-Instance Enumeration
 
@@ -52,12 +82,10 @@ Every finding must list the specific file:line. Grouping by pattern ("7 routes l
 The report includes a verification checklist for re-running the analysis after fixes:
 
 - All Check 3 type assertions on unvalidated input now use schema validation
+- All Check 3 `: any` annotations in server code have been replaced with proper types
+- All Check 3 `as unknown as` double-cast chains have been replaced with proper accessors
 - All Check 5 server routes now validate request.body/params/query with schemas
 - All cross-referenced findings have been addressed in both checks
-
-### Actionable Fixes
-
-Every finding includes a one-sentence fix description, not just in the recommendations section but inline with each finding.
 
 ## Supported Agents
 

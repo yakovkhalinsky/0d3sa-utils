@@ -1,9 +1,9 @@
 <!-- canonical-source: This file is the primary reference for the defensive-analysis skill. When updating the prompt logic, edit this file first, then propagate changes to cursor.mdc and copilot.instructions.md. -->
 
 ---
-description: "Run 10 defensive code analysis checks — mutation invalidation, query error handling, type safety, API path safety, runtime validation (client + server), state lifecycle, memory leaks, error state display, loading state display, uncontrolled state. Auto-detects stack and adapts checks. Outputs a PASS/FAIL report with file:line references, actionable fixes, and a summary score."
-allowed-tools: Read, Glob, Grep, Bash
-argument-hint: [path] (defaults to project root)
+description: "Run 10 defensive code analysis checks — mutation invalidation, query error handling, type safety, API path safety, runtime validation (client + server), state lifecycle, memory leaks, error state display, loading state display, uncontrolled state. Auto-detects stack and adapts checks. Outputs a PASS/FAIL report with file:line references, actionable fixes, and a summary score. Supports --fix to auto-fix findings."
+allowed-tools: Read, Glob, Grep, Bash, Edit, Write
+argument-hint: [path] [--fix] (defaults to project root; add --fix to auto-fix findings)
 ---
 
 # Defensive Code Analysis
@@ -109,17 +109,29 @@ Search for casts and annotations that bypass the type system.
 
 2. **`as { ... }` type assertions on unvalidated input** — `request.body as { title: string }`, `request.params as { id: string }`, `request.query as { page: number }` and similar patterns where runtime data is cast to a type without validation. These provide TypeScript type information but zero runtime guarantees. Every instance is a FAIL (severity: medium). This is a dual finding that also appears in Check 5 — report it here for type safety and cross-reference Check 5 for the validation gap.
 
-3. **`// @ts-ignore` or `// @ts-expect-error`** without a justified comment — FAIL (severity: low if infrequent, medium if widespread).
+3. **`// @ts-ignore` or `//ts-expect-error`** without a justified comment — FAIL (severity: low if infrequent, medium if widespread).
 
-4. **Untyped function parameters** — `: any`, untyped arrow params without context typing — FAIL (severity: medium).
+4. **`: any` type annotations on variables, returns, and callbacks** — Search for patterns like:
+   - `(m: any) =>` or `(r: any) =>` — untyped callback parameters in `.map()`, `.filter()`, `.forEach()`
+   - `let result: any` or `const items: any[]` — untyped variable declarations
+   - `function foo(): any` or `export function getBar(): any` — untyped return types
+   - `(request: any, reply: any)` — untyped handler parameters
+   
+   These are FAIL (severity: medium in server code, low in client code). Use the grep pattern `: any\b` but exclude matches that are already covered by item 1 (`as any`). Specifically search for:
+   - `: any\b` (not preceded by `as`)
+   - `: any[]`
+   - `: any)` (callback parameters)
+   Every instance is a FAIL. Severity: medium in server route handlers or API modules, low in client components.
 
 5. **`!` non-null assertions** on values that could be null/undefined at runtime — FAIL (severity: medium if in business logic, low if in UI).
 
+6. **`as unknown as { ... }` double-cast chains** — Patterns like `(obj as unknown as { prop: Type }).prop` that use `unknown` as an intermediary to access private/internal fields. FAIL (severity: medium). Fix: Add a proper getter method or widen the type.
+
 **Exclusions:** Test files are exempt. Server route handlers with `as any` for request params are medium, not critical.
 
-**Cross-reference with Check 5:** Every `request.body/params/query as { ... }` finding here should also be flagged in Check 5 as an unvalidated input boundary. This ensures the fix addresses both the type safety and validation aspects.
+**Cross-reference with Check 5:** Every `request.body/params/query as { ... }` finding here should also be flagged in Check 5 as an unvalidated input boundary. Every `: any` annotation on handler parameters or callback variables in server routes should also be noted in Check 5 as a signal that the surrounding code may lack validation.
 
-**Pass condition:** No `as any` casts in client code, no `as { ... }` assertions on unvalidated input, all `@ts-ignore`/`@ts-expect-error` justified.
+**Pass condition:** No `as any` casts in client code, no `as { ... }` assertions on unvalidated input, no `: any` type annotations in server code, all `@ts-ignore`/`@ts-expect-error` justified.
 **Fail condition:** Any unexplained type escape hatches in production code, or type assertions on unvalidated runtime data.
 
 ---
@@ -162,7 +174,12 @@ For every server route handler that accepts external input, verify that the inpu
 2. For each route file, find every POST/PUT/PATCH/DELETE endpoint.
 3. For each endpoint, check whether `request.body` is validated with `Schema.parse()`, `Schema.safeParse()`, a `validateBody()` helper, or equivalent BEFORE any business logic.
 4. Also check `request.params` and `request.query` — these are user-controlled input too.
-5. Specifically search for `request.body as { ... }`, `request.params as { ... }`, `request.query as { ... }` patterns. These are TypeScript type assertions that provide ZERO runtime validation. Every instance is a FAIL (severity: medium, or critical if no validation library is present).
+5. Specifically search for `request.body as { ... }`, `request.params as { ... }`, `request.query as { ... }` patterns. These are TypeScript type assertions that provide ZERO runtime validation.
+6. Also search for `: any` type annotations on handler parameters and callback variables in server route files (e.g., `(m: any) =>`, `(request: any, reply: any)`). These are signals that the surrounding code may lack proper validation — they widen the type to bypass type checking, often alongside unvalidated input.
+
+**Severity distinction for Check 5b findings:**
+- **Not validated at all** (no schema, no helper, just type assertions or raw destructuring): severity: **medium** in server code, **critical** if no validation library is present in the project.
+- **Validated but type-widened** (a `validateBody()`/`validateParams()`/`validateQuery()` call exists earlier in the handler, but the result is later accessed via `as any` or `: any`): severity: **low**. The runtime validation is present, but the type annotation widens the type unnecessarily. Fix: use the typed return value from the validation helper instead of widening.
 
 **What counts as validated:**
 - `validateBody(Schema, request.body, reply)` or `Schema.parse(request.body)` — PASS
@@ -176,6 +193,8 @@ For every server route handler that accepts external input, verify that the inpu
 **What about `request.params` and `request.query`:**
 - `request.params as { id: string }` — FAIL (use a param schema or at minimum validate the value)
 - `request.query as { page: number }` — FAIL (query strings arrive as strings; a cast to `number` is not validation)
+
+**`: any` as a validation gap signal:** When you find `: any` annotations in server route files (handler parameters, callback parameters in `.map()/.filter()`), check whether the surrounding code has proper schema validation. If it doesn't, this is a dual finding — report it in Check 3 for the type safety issue and here in Check 5 for the validation gap.
 
 **Pass condition:** All external data boundaries (both client and server) have runtime validation.
 **Fail condition:** Any boundary that accepts unvalidated external data.
@@ -265,13 +284,15 @@ State that can get stuck in an inconsistent state and never recover.
 
 After completing all 10 checks, review the findings for cross-check consistency:
 
-1. **Check 3 + Check 5 overlap:** Every `request.body/params/query as { ... }` pattern found in Check 3 should also appear in Check 5 as an unvalidated input boundary. If a pattern was found in one check but not the other, add it to the missing check with a note like "(cross-referenced from Check 3)" or "(cross-referenced from Check 5)".
+1. **Check 3 + Check 5 overlap (type assertions and `: any`):** Every `request.body/params/query as { ... }` pattern found in Check 3 should also appear in Check 5 as an unvalidated input boundary. Every `: any` annotation found in Check 3 on handler parameters or callback variables in server routes should also be noted in Check 5 as a signal that the surrounding code may lack validation. If a pattern was found in one check but not the other, add it to the missing check with a note like "(cross-referenced from Check 3)" or "(cross-referenced from Check 5)".
 
 2. **Check 1 + Check 10 overlap:** Mutations that lack `onError` handlers (Check 10 uncontrolled state) should also be reviewed for whether they invalidate queries on failure (Check 1). A mutation that invalidates only on `onSuccess` but not `onSettled` may leave stale data on error.
 
 3. **Check 7 + Check 10 overlap:** Resources created in `useEffect` or async operations (Check 7 memory leaks) should also be checked for cleanup in error paths (Check 10 uncontrolled state). An `AbortController` that is only aborted on success but not on error is both a memory leak and uncontrolled state.
 
 4. **Completeness check:** For Check 5b specifically, verify you found ALL server route files. Count the total route files and the total routes with validation, then report the coverage ratio. If more than half of routes lack validation, upgrade the severity of all Check 5 findings by one level (low → medium, medium → critical).
+
+5. **Severity consistency check:** For Check 5b findings, verify the severity assignment is correct: "not validated at all" should be medium (or critical if no validation library exists), while "validated but type-widened" should be low. Downgrading a finding to "validated but type-widened" requires confirming that a `validateBody()`/`validateParams()`/`validateQuery()` call exists earlier in the same handler.
 
 ---
 
@@ -352,17 +373,96 @@ After implementing fixes, re-run this analysis to verify:
   - **NEEDS ATTENTION**: 5-6 PASS, or 2+ critical findings
   - **CRITICAL**: 0-4 PASS, or 3+ critical findings
 
+## Phase 4: Fix Mode (Optional)
+
+If the user asks to fix the findings after the report, or if invoked with `--fix`, systematically implement the mechanical fixes. This phase transforms the analysis from a diagnostic into a remediation tool.
+
+### Fix priority order
+
+Fix findings in this order to maximize impact and avoid cascading issues:
+
+1. **Check 5 (Runtime Validation)** — Add missing Zod/validator schemas and apply `validateBody()`/`validateParams()`/`validateQuery()` to all unvalidated endpoints. This is highest priority because it closes security boundaries.
+2. **Check 3 (Type Safety)** — Replace `as any`, `as { ... }` type assertions on unvalidated input, `: any` annotations, `as unknown as` double-cast chains, and `!` non-null assertions. After Check 5 fixes are in place, type assertions on validated input can use the typed return from validation helpers.
+3. **Check 7 (Memory Leaks)** — Add cleanup returns to `useEffect`, unsubscribe subscriptions, clear timers, abort controllers.
+4. **Check 10 (Uncontrolled State)** — Add error-path resets for boolean flags, add error transitions to state machines, add rollback to optimistic updates.
+5. **Check 1 (Mutation Invalidation)** — Add `invalidateQueries`/`refetchQueries` to mutation success/error handlers.
+6. **Check 2 (Query Error Handling)** — Destructure and handle `error` from all query hooks.
+7. **Check 8 (Error State Handling)** — Add error state rendering to components that consume async data.
+8. **Check 9 (Loading State Handling)** — Add loading/disabled states to mutation triggers.
+9. **Check 4 (API Path Safety)** — Extract inline API paths to a centralized route map or constants file.
+10. **Check 6 (State Lifecycle Docs)** — Add lifecycle comment blocks to hooks/stores.
+
+### Fix procedures
+
+#### Fixing Check 5b: Server-side input validation
+
+For each unvalidated endpoint:
+
+1. **Create or find the Zod schema** for the endpoint's request body/params/query. Schemas should live in a shared `schemas/` or `types/` directory (e.g., `packages/types/src/schemas/requests.ts`).
+2. **Apply the validation helper** at the top of the handler, before any business logic:
+   ```typescript
+   // Before (FAIL):
+   const { title } = request.body as { title: string }
+   
+   // After (PASS):
+   const parsed = validateBody(CreateItemRequestSchema, request.body, reply)
+   if (!parsed) return
+   const { title } = parsed
+   ```
+3. **For params and query**, use `validateParams()` and `validateQuery()`:
+   ```typescript
+   // Before (FAIL):
+   const { id } = request.params as { id: string }
+   
+   // After (PASS):
+   const params = validateParams(IdParamSchema, request.params, reply)
+   if (!params) return
+   const { id } = params
+   ```
+4. **Verify the fix compiles** by running the build command.
+5. **Re-run the analysis** to confirm the finding is resolved.
+
+#### Fixing Check 3: Type safety
+
+After Check 5b fixes are in place:
+
+1. **`as any` casts**: Remove and replace with proper types. If the cast was on unvalidated input, the validation helper now provides the type.
+2. **`as { ... }` type assertions on unvalidated input**: Already fixed by Check 5b (use validation helper return type instead).
+3. **`: any` type annotations**: Replace with proper types from the validation schema return type, or add explicit interfaces.
+4. **`as unknown as { ... }` double-cast chains**: Replace with a proper getter method or widen the source type. For example:
+   ```typescript
+   // Before:
+   const memory = (squad as unknown as { memory?: UnifiedMemoryServices | null }).memory
+   
+   // After: Add a getter to the Squad class or use an optional interface
+   const memory = squad.memory // if typed properly
+   ```
+5. **`!` non-null assertions**: Add explicit null checks instead.
+
+#### Fixing other checks
+
+For each remaining check, follow the standard fix patterns:
+
+- **Memory Leaks (7)**: Add cleanup return functions to `useEffect`, add `.unsubscribe()`/`.close()` calls, add `clearTimeout`/`clearInterval`.
+- **Uncontrolled State (10)**: Add `onError` resets for boolean flags, add error transitions, add `onError` rollback for optimistic updates.
+- **Mutation Invalidation (1)**: Add `onSuccess`/`onSettled` with `invalidateQueries` or `refetchQueries`.
+- **Query Error Handling (2)**: Destructure `error` from query hooks and surface it in the UI.
+- **Error/Loading States (8/9)**: Add conditional renders for error and loading states in components.
+
 ### Execution
 
 1. Start by detecting the stack (Phase 1). Print the stack summary.
 2. Run checks 1-10 in order (Phase 2). For each:
-   a. Use Grep to find relevant patterns across the codebase.
+   a. Use Grep to find relevant patterns across the codebase. Use these specific grep patterns:
+      - **Check 3**: `as any\b`, `: any\b`, `as unknown as`, `@ts-ignore`, `@ts-expect-error`, `!\.` or `!\[` (non-null assertions), `request\.body as \{`, `request\.params as \{`, `request\.query as \{`
+      - **Check 5**: `request\.body`, `request\.params`, `request\.query`, `validateBody`, `validateParams`, `validateQuery`, `\.parse(`, `safeParse(`
    b. Use Read to inspect specific files where patterns are found.
    c. Use Glob to find all files in relevant directories.
    d. **For Check 5b specifically**: Glob for all route/controller/handler files, then read each one to identify every endpoint and whether it validates input. Report the coverage ratio.
    e. Record **every individual instance** with file:line and severity. Do NOT group findings by pattern — list each occurrence separately.
 3. Run cross-check verification (Phase 2.5).
 4. Generate the report (Phase 3).
+5. If `--fix` was specified or the user asks to fix findings, proceed to Phase 4.
 
 Be thorough but concise. Focus on findings, not compliments. Do not skip a check even if the stack detection suggests it may not apply — adapt the check to whatever patterns exist. For example, if no query library is found, Check 2 applies to raw fetch calls instead.
 
